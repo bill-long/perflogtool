@@ -1,11 +1,12 @@
-use std::env;
+use std::{env, time::Duration};
 
+use time::macros::datetime;
 use windows::{
     core::{HSTRING, PWSTR},
-    Win32::System::Performance::{
+    Win32::{System::{Performance::{
         PdhBindInputDataSourceW, PdhEnumMachinesHW, PdhEnumObjectItemsHW, PdhEnumObjectsHW,
-        PDH_CSTATUS_NO_OBJECT, PDH_MORE_DATA, PERF_DETAIL_WIZARD,
-    },
+        PDH_CSTATUS_NO_OBJECT, PDH_MORE_DATA, PERF_DETAIL_WIZARD, PdhGetDataSourceTimeRangeH, PDH_TIME_INFO, PdhCloseLog,
+      }}  }
 };
 
 fn main() {
@@ -70,6 +71,30 @@ fn main() {
             }
         }
     }
+
+    let (start_time, end_time) = get_time_range(hdatasource);
+
+    println!("Time range: {} - {}", start_time, end_time);
+
+    unsafe { PdhCloseLog(hdatasource, 0) };
+}
+
+fn get_time_range(hdatasource: isize) -> (time::PrimitiveDateTime, time::PrimitiveDateTime) {
+    let mut pdwnumentries = 0;
+    let mut pinfo = PDH_TIME_INFO{StartTime: 0, EndTime: 0, SampleCount: 0};
+    let mut pdwbuffersize = 24;
+    let pdhstatus = unsafe { PdhGetDataSourceTimeRangeH(hdatasource, &mut pdwnumentries, &mut pinfo, &mut pdwbuffersize) };
+
+    if pdhstatus != 0 {
+        panic!("Failed to get time range: {:#x}", pdhstatus);
+    }
+
+    let filetime_basedate = datetime!(1601-01-01 00:00:00);
+    let start_nanos = Duration::from_nanos(pinfo.StartTime as u64 * 100);
+    let start_time = filetime_basedate + start_nanos;
+    let end_nanos = Duration::from_nanos(pinfo.EndTime as u64 * 100);
+    let end_time = filetime_basedate + end_nanos;
+    (start_time, end_time)
 }
 
 fn enum_object_items(machine: &String, object: String, hdatasource: isize) -> Option<(Vec<String>, Vec<String>)> {
