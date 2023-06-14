@@ -11,15 +11,15 @@ use crate::pdh_helper::{
 fn main() {
     env::set_var("RUST_BACKTRACE", "1");
 
-    //let args: Vec<String> = env::args().collect();
-    //if args.len() < 2 {
-    //    println!("Usage: {} <glob pattern>", args[0]);
-    //    return;
-    //}
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        println!("Usage: {} <glob pattern>", args[0]);
+        return;
+    }
 
-    //let glob_pattern = &args[1];
+    let glob_pattern = &args[1];
 
-    let glob_pattern = "C:\\Users\\bill\\Downloads\\*0612*.blg";
+    //let glob_pattern = "C:\\Users\\bill\\Downloads\\*0612*.blg";
 
     let mut files: Vec<String> = glob::glob(glob_pattern)
         .expect("Failed to read glob pattern")
@@ -46,22 +46,7 @@ fn main() {
 
     let summary = get_perflog_summary(hdatasource);
 
-    for machine in summary.machines {
-        println!("Machine: {}", machine.name);
-
-        for object in machine.objects {
-            println!("  {}", object.name);
-            println!("    Counters:");
-            for counter in object.counters {
-                println!("      {}", counter);
-            }
-
-            println!("    Instances:");
-            for instance in object.instances {
-                println!("      {}", instance);
-            }
-        }
-    }
+    summary.print_hierarchy();
 
     println!("Time range: {} - {}", summary.start_time, summary.end_time);
 

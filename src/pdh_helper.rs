@@ -16,6 +16,42 @@ pub struct PerfLogSummary {
     pub end_time: time::PrimitiveDateTime,
 }
 
+impl PerfLogSummary {
+    pub fn print_hierarchy(&self) {
+        for machine in &self.machines {
+            println!("Machine: {}", machine.name);
+
+            for object in &machine.objects {
+                println!("  {}", object.name);
+                println!("    Counters:");
+                for counter in &object.counters {
+                    println!("      {}", counter);
+                }
+
+                println!("    Instances:");
+                for instance in &object.instances {
+                    println!("      {}", instance);
+                }
+            }
+        }
+    }
+
+    pub fn print_flat(&self) {
+        for machine in &self.machines {
+            for object in &machine.objects {
+                for instance in &object.instances {
+                    for counter in &object.counters {
+                        println!(
+                            "{}\\{}({})\\{}",
+                            machine.name, object.name, instance, counter
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub struct MachineSummary {
     pub name: String,
     pub objects: Vec<ObjectSummary>,
