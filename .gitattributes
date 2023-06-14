@@ -1,0 +1,3 @@
+*.lock eol=lf
+*.rs eol=lf
+*.toml eol=lf
