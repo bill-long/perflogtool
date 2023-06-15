@@ -1,11 +1,15 @@
 pub mod pdh_helper;
 
-use std::env;
+use std::{env};
 
-use windows::Win32::System::Performance::PdhCloseLog;
+use windows::{
+    Win32::System::Performance::{
+        PdhCloseLog,
+    },
+};
 
 use crate::pdh_helper::{
-    bind_input_logfiles, get_perflog_summary,
+    bind_input_logfiles, get_perflog_summary, read_counter_values,
 };
 
 fn main() {
@@ -46,9 +50,18 @@ fn main() {
 
     let summary = get_perflog_summary(hdatasource);
 
-    summary.print_hierarchy();
-
     println!("Time range: {} - {}", summary.start_time, summary.end_time);
+
+    let counters = summary.get_all_counters();
+
+    let counters_to_read = &counters
+        .iter()
+        .filter(|s| s.contains("\\Processor(_Total)\\"))
+        .collect::<Vec<&String>>();
+
+    let counter_data = read_counter_values(hdatasource, counters_to_read);
+
+    println!("Counter data has {} entries", counter_data.len());
 
     unsafe { PdhCloseLog(hdatasource, 0) };
 }

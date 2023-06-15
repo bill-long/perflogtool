@@ -1,14 +1,21 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
-use time::macros::datetime;
+use time::{macros::datetime, PrimitiveDateTime};
 use windows::{
     core::{HSTRING, PWSTR},
     Win32::System::Performance::{
-        PdhBindInputDataSourceW, PdhEnumMachinesHW, PdhEnumObjectItemsHW, PdhEnumObjectsHW,
-        PdhGetDataSourceTimeRangeH, PDH_CSTATUS_NO_OBJECT, PDH_MORE_DATA, PDH_TIME_INFO,
-        PERF_DETAIL_WIZARD,
+        PdhAddCounterW, PdhBindInputDataSourceW, PdhCollectQueryDataWithTime, PdhEnumMachinesHW,
+        PdhEnumObjectItemsHW, PdhEnumObjectsHW, PdhGetDataSourceTimeRangeH,
+        PdhGetFormattedCounterValue, PdhOpenQueryH, PDH_CSTATUS_NO_OBJECT, PDH_FMT_COUNTERVALUE,
+        PDH_FMT_LARGE, PDH_INVALID_DATA, PDH_MORE_DATA, PDH_TIME_INFO, PERF_DETAIL_WIZARD,
     },
 };
+
+pub enum CounterValueWithTime {
+    Long(PrimitiveDateTime, i32),
+    Double(PrimitiveDateTime, f64),
+    Large(PrimitiveDateTime, i64),
+}
 
 pub struct PerfLogSummary {
     pub machines: Vec<MachineSummary>,
@@ -36,19 +43,22 @@ impl PerfLogSummary {
         }
     }
 
-    pub fn print_flat(&self) {
+    pub fn get_all_counters(&self) -> Vec<String> {
+        let mut all_counters = Vec::new();
         for machine in &self.machines {
             for object in &machine.objects {
                 for instance in &object.instances {
                     for counter in &object.counters {
-                        println!(
+                        all_counters.push(format!(
                             "{}\\{}({})\\{}",
                             machine.name, object.name, instance, counter
-                        );
+                        ));
                     }
                 }
             }
         }
+
+        all_counters
     }
 }
 
@@ -89,7 +99,10 @@ pub fn get_perflog_summary(hdatasource: isize) -> PerfLogSummary {
             objects.push(object_summary);
         }
 
-        machines.push(MachineSummary { name: machine, objects });
+        machines.push(MachineSummary {
+            name: machine,
+            objects,
+        });
     }
 
     let (start_time, end_time) = get_time_range(hdatasource);
@@ -124,12 +137,15 @@ pub fn get_time_range(hdatasource: isize) -> (time::PrimitiveDateTime, time::Pri
         panic!("Failed to get time range: {:#x}", pdhstatus);
     }
 
-    let filetime_basedate = datetime!(1601-01-01 00:00:00);
-    let start_nanos = Duration::from_nanos(pinfo.StartTime as u64 * 100);
-    let start_time = filetime_basedate + start_nanos;
-    let end_nanos = Duration::from_nanos(pinfo.EndTime as u64 * 100);
-    let end_time = filetime_basedate + end_nanos;
+    let start_time = get_time_from_filetime(pinfo.StartTime);
+    let end_time = get_time_from_filetime(pinfo.EndTime);
     (start_time, end_time)
+}
+
+pub fn get_time_from_filetime(filetime: i64) -> time::PrimitiveDateTime {
+    let filetime_basedate = datetime!(1601-01-01 00:00:00);
+    let nanos = Duration::from_nanos(filetime as u64 * 100);
+    filetime_basedate + nanos
 }
 
 pub fn enum_object_items(
@@ -303,4 +319,76 @@ fn get_strings_from_pwstr(object_list: &PWSTR, buffer_size: u32) -> Vec<String> 
     strings.pop();
 
     strings
+}
+
+pub fn read_counter_values(
+    hdatasource: isize,
+    counters_to_read: &Vec<&String>,
+) -> HashMap<String, Vec<CounterValueWithTime>> {
+    let mut counter_data = HashMap::<String, Vec<CounterValueWithTime>>::new();
+
+    let mut phquery: isize = isize::default();
+    let pdhstatus = unsafe { PdhOpenQueryH(hdatasource, 0, &mut phquery) };
+
+    if pdhstatus != 0 {
+        panic!("Failed to open query: {:#x}", pdhstatus);
+    }
+
+    let mut counter_handles = HashMap::<String, isize>::new();
+
+    for counter in counters_to_read {
+        let counter_path = HSTRING::from(*counter);
+        let mut phcounter: isize = isize::default();
+        let pdhstatus = unsafe { PdhAddCounterW(phquery, &counter_path, 0, &mut phcounter) };
+
+        if pdhstatus != 0 {
+            panic!("Failed to add counter: {:#x}", pdhstatus);
+        }
+
+        counter_handles.insert(counter.to_string(), phcounter);
+        counter_data.insert(counter.to_string(), Vec::<CounterValueWithTime>::new());
+    }
+
+    loop {
+        let mut filetime: i64 = 0;
+        let pdhstatus = unsafe { PdhCollectQueryDataWithTime(phquery, &mut filetime) };
+
+        if pdhstatus != 0 {
+            break;
+        }
+
+        let time = get_time_from_filetime(filetime);
+
+        for (counter_name, h_counter) in &counter_handles {
+            let mut pvalue = PDH_FMT_COUNTERVALUE::default();
+            let pdhstatus = unsafe {
+                PdhGetFormattedCounterValue(*h_counter, PDH_FMT_LARGE, None, &mut pvalue)
+            };
+
+            match pdhstatus {
+                PDH_INVALID_DATA => println!("{} {}: {}", time, counter_name, "Invalid data"),
+
+                0 => match pvalue.CStatus {
+                    0 => unsafe {
+                        let cv = CounterValueWithTime::Large(time, pvalue.Anonymous.largeValue);
+                        counter_data
+                            .get_mut(counter_name)
+                            .expect("Key not found")
+                            .push(cv);
+                    },
+                    _ => {
+                        println!(
+                            "{} {}: Unexpected CStatus {}",
+                            time, counter_name, pvalue.CStatus
+                        );
+                    }
+                },
+
+                _ => {
+                    panic!("Failed to get counter value: {:#x}", pdhstatus);
+                }
+            }
+        }
+    }
+    counter_data
 }
